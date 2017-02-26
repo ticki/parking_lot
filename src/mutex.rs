@@ -212,6 +212,22 @@ impl<T: ?Sized> Mutex<T> {
         }
     }
 
+    /// Creates a future to asynchronously acquire the lock.
+    ///
+    /// This creates a "future" (from `futures` library), which on every poll checks if the lock
+    /// is available. If it is, the lock is acquired.
+    ///
+    /// On `wait()` calls, this uses the normal contention logic to avoid the overhead of
+    /// spinlocking.
+    ///
+    /// This function is only available with the `futures` feature enabled.
+    #[cfg(feature = "futures")]
+    pub fn async_lock(&self) -> MutexFuture<T> {
+        MutexFuture {
+            mutex: self,
+        }
+    }
+
     /// Returns a mutable reference to the underlying data.
     ///
     /// Since this call borrows the `Mutex` mutably, no actual locking needs to
@@ -332,6 +348,30 @@ unsafe impl<'a, T: ?Sized> StableAddress for MutexGuard<'a, T> {}
 #[inline]
 pub fn guard_lock<'a, T: ?Sized>(guard: &MutexGuard<'a, T>) -> &'a RawMutex {
     &guard.mutex.raw
+}
+
+/// Future for mutex locks.
+#[cfg(feature = "futures")]
+pub struct MutexFuture<'a, T> {
+    mutex: &'a Mutex<T>,
+}
+
+#[cfg(feature = "futures")]
+impl<'a, T> Future for MutexFuture<'a, T> {
+    type Item = MutexGuard<'a, T>;
+    type Error = ();
+
+    fn poll(&mut self) -> futures::Poll<MutexGuard<'a, T>, ()> {
+        if let Some(guard) = self.mutex.try_lock() {
+            Ok(futures::Async::Ready(guard))
+        } else {
+            Ok(futures::Async::NotReady)
+        }
+    }
+
+    fn wait(self) -> Result<MutexGuard<'a, T>, ()> {
+        Ok(self.mutex.lock())
+    }
 }
 
 #[cfg(test)]
